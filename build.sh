@@ -2,11 +2,17 @@
 set -euo pipefail
 
 PROJECT_DIR="${0:A:h}"
-APP_DIR="$PROJECT_DIR/dist/MediaPrimeKey.app"
+DIST_DIR="$PROJECT_DIR/dist"
+STAGING_ROOT="$(mktemp -d /tmp/mediaprimekey-build.XXXXXX)"
+trap 'rm -rf "$STAGING_ROOT"' EXIT
+
+APP_DIR="$STAGING_ROOT/MediaPrimeKey.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-ARCHIVE_PATH="$PROJECT_DIR/dist/MediaPrimeKey.zip"
+STAGED_ARCHIVE_PATH="$STAGING_ROOT/MediaPrimeKey.zip"
+DIST_APP_DIR="$DIST_DIR/MediaPrimeKey.app"
+ARCHIVE_PATH="$DIST_DIR/MediaPrimeKey.zip"
 BUILD_DIR="$PROJECT_DIR/.build"
 MODULE_CACHE_DIR="$BUILD_DIR/module-cache"
 TMP_DIR="$BUILD_DIR/tmp"
@@ -19,7 +25,7 @@ else
   SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 fi
 
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$MODULE_CACHE_DIR" "$TMP_DIR" "$ICONSET_DIR"
+mkdir -p "$DIST_DIR" "$MACOS_DIR" "$RESOURCES_DIR" "$MODULE_CACHE_DIR" "$TMP_DIR" "$ICONSET_DIR"
 cp "$PROJECT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 
 sips -s format png -z 16 16 "$PROJECT_DIR/Resources/AppIcon.png" --out "$ICONSET_DIR/icon_16x16.png" >/dev/null
@@ -58,19 +64,20 @@ lipo -create \
   "$BUILD_DIR/MediaPrimeKey-x86_64" \
   -output "$MACOS_DIR/MediaPrimeKey"
 
-# Cloud-backed folders can attach Finder metadata that code signing rejects.
+# Sign in a local temporary directory. Cloud-backed workspace folders can attach
+# Finder metadata immediately, which makes codesign reject an otherwise valid app.
 xattr -cr "$APP_DIR"
 codesign --force --deep --sign - \
   --identifier nl.mediaprimekey.app \
   "$APP_DIR"
-
-xattr -d com.apple.FinderInfo "$APP_DIR" 2>/dev/null || true
-xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_DIR" 2>/dev/null || true
 codesign --verify --deep --strict "$APP_DIR"
 
-ditto -c -k --norsrc --keepParent "$APP_DIR" "$ARCHIVE_PATH"
-xattr -d com.apple.FinderInfo "$APP_DIR" 2>/dev/null || true
-xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_DIR" 2>/dev/null || true
+ditto -c -k --norsrc --keepParent "$APP_DIR" "$STAGED_ARCHIVE_PATH"
 
-echo "Built: $APP_DIR"
+rm -rf "$DIST_APP_DIR"
+rm -f "$ARCHIVE_PATH"
+ditto --norsrc "$APP_DIR" "$DIST_APP_DIR"
+cp "$STAGED_ARCHIVE_PATH" "$ARCHIVE_PATH"
+
+echo "Built: $DIST_APP_DIR"
 echo "Archive: $ARCHIVE_PATH"

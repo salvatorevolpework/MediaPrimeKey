@@ -21,10 +21,13 @@ jobs:
 
       - name: Verify release
         run: |
-          lipo -archs dist/MediaPrimeKey.app/Contents/MacOS/MediaPrimeKey | grep -q arm64
-          lipo -archs dist/MediaPrimeKey.app/Contents/MacOS/MediaPrimeKey | grep -q x86_64
-          codesign --verify --deep --strict dist/MediaPrimeKey.app
-          dist/MediaPrimeKey.app/Contents/MacOS/MediaPrimeKey --self-test
+          ditto -x -k dist/MediaPrimeKey.zip "$RUNNER_TEMP/MediaPrimeKey-release"
+          RELEASE_APP="$RUNNER_TEMP/MediaPrimeKey-release/MediaPrimeKey.app"
+          lipo -archs "$RELEASE_APP/Contents/MacOS/MediaPrimeKey" | grep -q arm64
+          lipo -archs "$RELEASE_APP/Contents/MacOS/MediaPrimeKey" | grep -q x86_64
+          codesign --verify --deep --strict "$RELEASE_APP"
+          "$RELEASE_APP/Contents/MacOS/MediaPrimeKey" --self-test
+          test "$(plutil -extract CFBundleShortVersionString raw "$RELEASE_APP/Contents/Info.plist")" = "${GITHUB_REF_NAME#v}"
 
       - name: Publish GitHub release
         env:

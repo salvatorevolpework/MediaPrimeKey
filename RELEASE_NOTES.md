@@ -1,11 +1,11 @@
-# MediaPrimeKey 1.2
+# MediaPrimeKey 1.2.1
 
-The first public release of MediaPrimeKey.
+This maintenance release improves Spotify cold-start playback.
 
-- Choose Spotify or Apple Music as the preferred media-key target.
-- Automatically open the selected player when needed.
-- Control Play/Pause, Next and Previous from your keyboard.
-- Run at login and optionally hide the menu bar icon.
+- Fixes repeated Play/Pause presses cancelling each other while Spotify opens.
+- Coalesces media-key presses during the cold-start window.
+- Gives Spotify's playback service time to initialize.
+- Safely replays the idempotent Play command when Spotify first launches.
 - Universal build for Apple Silicon and Intel Macs.
 - Requires macOS 13 Ventura or later.
 

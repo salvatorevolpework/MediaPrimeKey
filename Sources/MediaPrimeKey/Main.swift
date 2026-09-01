@@ -41,6 +41,15 @@ private enum SelfTest {
             precondition(player.appleEvent(for: .previous, startPlayback: false).eventID == 0x5072_6576)
         }
 
+        var coldStartGate = ColdStartPlaybackGate()
+        precondition(coldStartGate.begin(for: .spotify))
+        precondition(coldStartGate.isPending(for: .spotify))
+        precondition(!coldStartGate.begin(for: .spotify))
+        precondition(coldStartGate.begin(for: .appleMusic))
+        coldStartGate.end(for: .spotify)
+        precondition(!coldStartGate.isPending(for: .spotify))
+        precondition(coldStartGate.begin(for: .spotify))
+
         print("MediaPrimeKey self-test passed")
     }
 }

@@ -6,6 +6,22 @@ struct PlayerAppleEvent {
     let eventID: AEEventID
 }
 
+struct ColdStartPlaybackGate {
+    private var pendingPlayers: Set<MusicPlayer> = []
+
+    mutating func begin(for player: MusicPlayer) -> Bool {
+        pendingPlayers.insert(player).inserted
+    }
+
+    mutating func end(for player: MusicPlayer) {
+        pendingPlayers.remove(player)
+    }
+
+    func isPending(for player: MusicPlayer) -> Bool {
+        pendingPlayers.contains(player)
+    }
+}
+
 private func automationPermissionStatus(for processIdentifier: pid_t) -> OSStatus {
     var processIdentifier = processIdentifier
     var descriptor = AEAddressDesc()
@@ -100,7 +116,9 @@ final class MusicPlayerController {
         let player: MusicPlayer
         let event: PlayerAppleEvent?
         let completion: Completion?
+        let isColdStartPlayback: Bool
         var retryCount = 0
+        var startupReplayCount = 0
     }
 
     private let permissionQueue = DispatchQueue(
@@ -109,6 +127,7 @@ final class MusicPlayerController {
     )
     private var requests: [Request] = []
     private var isProcessing = false
+    private var coldStartGate = ColdStartPlaybackGate()
 
     func isInstalled(_ player: MusicPlayer) -> Bool {
         NSWorkspace.shared.urlForApplication(
@@ -125,11 +144,29 @@ final class MusicPlayerController {
         with player: MusicPlayer,
         completion: Completion? = nil
     ) {
+        let isColdStartPlayback = command == .playPause && !isRunning(player)
+
+        // While a cold-start Play is still being delivered, another hardware
+        // Play/Pause press must not enqueue a toggle that immediately pauses it.
+        if command == .playPause, coldStartGate.isPending(for: player) {
+            completion?(nil)
+            return
+        }
+
+        if isColdStartPlayback {
+            _ = coldStartGate.begin(for: player)
+        }
+
         let event = player.appleEvent(
             for: command,
-            startPlayback: command == .playPause && !isRunning(player)
+            startPlayback: isColdStartPlayback
         )
-        enqueue(Request(player: player, event: event, completion: completion))
+        enqueue(Request(
+            player: player,
+            event: event,
+            completion: completion,
+            isColdStartPlayback: isColdStartPlayback
+        ))
     }
 
     func requestAutomationPermission(
@@ -139,7 +176,8 @@ final class MusicPlayerController {
         enqueue(Request(
             player: player,
             event: nil,
-            completion: completion
+            completion: completion,
+            isColdStartPlayback: false
         ))
     }
 
@@ -187,7 +225,8 @@ final class MusicPlayerController {
     ) {
         guard let appURL = NSWorkspace.shared.urlForApplication(
             withBundleIdentifier: player.bundleIdentifier
-        ) else {
+        )
+        else {
             completion(.notInstalled(player))
             return
         }
@@ -216,9 +255,10 @@ final class MusicPlayerController {
                     return
                 }
 
-                // The process exists here, but its AppleScript dictionary may need
-                // a brief moment before accepting the first command.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                // Spotify reports as launched before its playback service is ready.
+                // Give cold starts time to accept the first media command.
+                let settleDelay = player == .spotify ? 1.25 : 0.5
+                DispatchQueue.main.asyncAfter(deadline: .now() + settleDelay) {
                     completion(nil)
                 }
             }
@@ -278,7 +318,20 @@ final class MusicPlayerController {
                 options: [.noReply, .neverInteract],
                 timeout: 2.0
             )
-            finish(request, error: nil)
+
+            // Spotify can silently ignore the first Play event while its playback
+            // service is warming up. Replaying Play is safe and cannot pause it.
+            if request.isColdStartPlayback,
+               request.player == .spotify,
+               request.startupReplayCount == 0 {
+                var replay = request
+                replay.startupReplayCount += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
+                    self?.execute(replay)
+                }
+            } else {
+                finish(request, error: nil)
+            }
         } catch let sendError as NSError {
             retryOrFinish(
                 request,
@@ -312,6 +365,9 @@ final class MusicPlayerController {
 
     private func finish(_ request: Request, error: MusicPlayerControlError?) {
         dispatchPrecondition(condition: .onQueue(.main))
+        if request.isColdStartPlayback {
+            coldStartGate.end(for: request.player)
+        }
         request.completion?(error)
         isProcessing = false
         processNextRequest()
